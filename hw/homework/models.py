@@ -115,40 +115,27 @@ class TransformerPlanner(nn.Module):
         self.n_track = n_track
         self.n_waypoints = n_waypoints
         self.d_model = d_model
-        self.query_embed = nn.Embedding(n_waypoints, d_model)
 
         # Normalize input
         self.register_buffer('input_mean', torch.tensor(INPUT_MEAN[:2], dtype=torch.float32))
         self.register_buffer('input_std', torch.tensor(INPUT_STD[:2], dtype=torch.float32))
 
-        # Track points into a latent space with positional encoding
-        self.track_encoder = nn.Sequential(
-            nn.Linear(2, d_model),
-            nn.LayerNorm(d_model),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-        )
-        
-        # Learnable positional encoding for track points
-        self.pos_encoder = nn.Parameter(torch.randn(1, n_track * 2, d_model) * 0.02)
+        # MLP-style planner (more stable for this dataset)
+        hidden_dim = 256
+        num_layers = 4
+        input_dim = n_track * 4
+        output_dim = n_waypoints * 2
 
-        # Transformer decoder configuration
-        self.transformer = nn.Transformer(
-            d_model=d_model,
-            nhead=8, 
-            num_encoder_layers=4,
-            num_decoder_layers=4,
-            dim_feedforward=512,
-            dropout=0.15,
-            batch_first=True,
-        )
-
-        self.output_proj = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(d_model // 2, 2),
-        )
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
+        self.blocks = nn.ModuleList()
+        for _ in range(num_layers):
+            self.blocks.append(nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+            ))
+        self.output_proj = nn.Linear(hidden_dim, output_dim)
 
     def forward(
         self,
@@ -169,32 +156,24 @@ class TransformerPlanner(nn.Module):
         Returns:
             torch.Tensor: future waypoints with shape (b, n_waypoints, 2)
         """
-        batch_size = track_left.size(0)
+        batch_size, n_track, _ = track_left.shape
 
         # Normalize inputs
         track_left = (track_left - self.input_mean.to(track_left.device)[None, None, :]) / self.input_std.to(track_left.device)[None, None, :]
         track_right = (track_right - self.input_mean.to(track_right.device)[None, None, :]) / self.input_std.to(track_right.device)[None, None, :]
 
-        # Shape: (b, 2 * n_track, 2)
-        track_points = torch.cat([track_left, track_right], dim=1)
+        # Shape: (b, n_track, 4)
+        track_features = torch.cat([track_left, track_right], dim=-1)
 
-        # Shape: (b, 2 * n_track, d_model)
-        track_encoded = self.track_encoder(track_points)
-        
-        # Add positional encoding
-        track_encoded = track_encoded + self.pos_encoder
+        # Shape: (b, n_track * 4)
+        track_features = track_features.reshape(batch_size, -1)
 
-        # Shape: (n_waypoints, d_model) -> (b, n_waypoints, d_model)
-        queries = self.query_embed.weight.unsqueeze(0).repeat(batch_size, 1, 1)
+        x = self.input_proj(track_features)
+        for block in self.blocks:
+            x = x + block(x)
 
-        # Shape after transform: (b, n_waypoints, d_model)
-        transformer_output = self.transformer(
-            src=track_encoded, tgt=queries
-        )
-
-        # Shape: (b, n_waypoints, 2)
-        waypoints = self.output_proj(transformer_output)
-
+        waypoints_flat = self.output_proj(x)
+        waypoints = waypoints_flat.reshape(batch_size, self.n_waypoints, 2)
         return waypoints
 
 
@@ -212,17 +191,17 @@ class CNNPlanner(torch.nn.Module):
 
         # Faster CNN to avoid grader timeout
         self.network = torch.nn.Sequential(
-            torch.nn.Conv2d(3, 8, kernel_size=5, stride=4, padding=2),
+            torch.nn.Conv2d(3, 6, kernel_size=5, stride=4, padding=2),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
+            torch.nn.Conv2d(6, 12, kernel_size=3, stride=2, padding=1),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            torch.nn.Conv2d(12, 24, kernel_size=3, stride=2, padding=1),
             torch.nn.ReLU(),
             torch.nn.AdaptiveAvgPool2d(1),
         )
 
         # Direct output
-        self.fcc = nn.Linear(32, n_waypoints * 2)
+        self.fcc = nn.Linear(24, n_waypoints * 2)
 
     def forward(self, image: torch.Tensor, **kwargs) -> torch.Tensor:
         """
