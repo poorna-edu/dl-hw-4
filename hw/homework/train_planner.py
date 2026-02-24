@@ -76,11 +76,20 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     metrics = PlannerMetric()
 
+    best_l1 = float("inf")
+    best_path = log_dir / f"{model_name}_best.th"
+
     for epoch in range(num_epoch):
         metrics.reset()
         train_loss = train_step(model, train_data, optimizer, device, model_name, **kwargs)
         validation_step(model, val_data, metrics, device, model_name, **kwargs)
         val_metrics = log_metrics(logger, metrics, epoch)
+
+        # Save best checkpoint based on validation L1 error
+        current_l1 = val_metrics["l1_error"]
+        if current_l1 < best_l1:
+            best_l1 = current_l1
+            torch.save(model.state_dict(), best_path)
 
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % 10 == 0:
             print(
@@ -94,7 +103,9 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
 
     save_model(model)
     torch.save(model.state_dict(), log_dir / f"{model_name}.th")
-    print(f"Model saved to {log_dir / f'{model_name}.th'}")
+    if best_path.exists():
+        print(f"Best model saved to {best_path}")
+    print(f"Final model saved to {log_dir / f'{model_name}.th'}")
 
 
 if __name__ == "__main__":
