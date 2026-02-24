@@ -12,13 +12,21 @@ from .metrics import PlannerMetric
 from .datasets.road_dataset import load_data
 
 
-def weighted_l1_loss(preds, targets, mask):
+def weighted_l1_loss(preds, targets, mask, model_name="mlp_planner"):
     mask = mask.float().unsqueeze(-1)
     l1_diff = torch.abs(preds - targets) * mask
     valid_count = mask[..., 0].sum() + 1e-6
     longitudinal_loss = l1_diff[..., 0].sum() / valid_count
     lateral_loss = l1_diff[..., 1].sum() / valid_count
-    return longitudinal_loss + lateral_loss
+    
+    # Weight lateral error more heavily since it's the bottleneck
+    # CNN needs more aggressive lateral error reduction (threshold 0.45 vs 0.6)
+    if model_name == "cnn_planner":
+        lateral_weight = 3.0  # More aggressive for CNN
+    else:
+        lateral_weight = 2.5  # Strong focus for MLP/Transformer
+    
+    return longitudinal_loss + lateral_weight * lateral_loss
 
 
 def train_step(model, train_data, optimizer, device, model_name, **kwargs):
@@ -34,7 +42,7 @@ def train_step(model, train_data, optimizer, device, model_name, **kwargs):
 
         optimizer.zero_grad()
         preds = model(image, **kwargs) if model_name == "cnn_planner" else model(track_left, track_right, **kwargs)
-        loss = weighted_l1_loss(preds, waypoints, waypoints_mask)
+        loss = weighted_l1_loss(preds, waypoints, waypoints_mask, model_name)
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
@@ -73,14 +81,32 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
     model = load_model(model_name, **kwargs).to(device)
     train_data = load_data("drive_data/train", shuffle=True, batch_size=batch_size, num_workers=2)
     val_data = load_data("drive_data/val", shuffle=False)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    
+    # Add learning rate scheduler for better convergence
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epoch)
     metrics = PlannerMetric()
+    
+    # Track best model based on lateral error (most important metric)
+    best_lateral_error = float('inf')
+    best_epoch = 0
 
     for epoch in range(num_epoch):
         metrics.reset()
         train_loss = train_step(model, train_data, optimizer, device, model_name, **kwargs)
         validation_step(model, val_data, metrics, device, model_name, **kwargs)
         val_metrics = log_metrics(logger, metrics, epoch)
+        scheduler.step()
+        
+        # Save best model based on lateral error
+        current_lateral_error = val_metrics['lateral_error']
+        if current_lateral_error < best_lateral_error:
+            best_lateral_error = current_lateral_error
+            best_epoch = epoch + 1
+            # Save best checkpoint in log directory
+            torch.save(model.state_dict(), log_dir / f"{model_name}_best.th")
+            # Also save to homework directory immediately
+            save_model(model)
 
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % 10 == 0:
             print(
@@ -89,12 +115,13 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
                 f"Val L1 Error: {val_metrics['l1_error']:.4f} | "
                 f"Longitudinal Error: {val_metrics['longitudinal_error']:.4f} | "
                 f"Lateral Error: {val_metrics['lateral_error']:.4f} | "
-                f"Samples: {val_metrics['num_samples']:.4f}"
+                f"Best Lateral: {best_lateral_error:.4f} (epoch {best_epoch})"
             )
 
-    save_model(model)
+    # Save final model as well
     torch.save(model.state_dict(), log_dir / f"{model_name}.th")
-    print(f"Model saved to {log_dir / f'{model_name}.th'}")
+    print(f"Training complete! Best lateral error: {best_lateral_error:.4f} at epoch {best_epoch}")
+    print(f"Best model saved to: {log_dir / f'{model_name}_best.th'}")
 
 
 if __name__ == "__main__":
