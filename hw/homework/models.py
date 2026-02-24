@@ -28,25 +28,26 @@ class MLPPlanner(nn.Module):
         self.register_buffer('input_mean', torch.tensor(INPUT_MEAN[:2], dtype=torch.float32))
         self.register_buffer('input_std', torch.tensor(INPUT_STD[:2], dtype=torch.float32))
 
-        hidden_dim = 128
-        num_layers = 5
+        hidden_dim = 256
+        num_layers = 6
 
         input_dim = n_track * 4
         output_dim = n_waypoints * 2
 
-        # Define layers
-        layers = []
-        layers.append(nn.Linear(input_dim, hidden_dim))
-        for _ in range(num_layers - 1):
-            layers.extend([
+        # Define layers with residual connections
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
+        
+        # Build residual blocks
+        self.blocks = nn.ModuleList()
+        for _ in range(num_layers):
+            self.blocks.append(nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim),
                 nn.LayerNorm(hidden_dim),
                 nn.ReLU(),
-                nn.Dropout(0.1),
-            ])
-        layers.append(nn.Linear(hidden_dim, output_dim))
-
-        self.model = nn.Sequential(*layers)
+                nn.Dropout(0.15),
+            ))
+        
+        self.output_proj = nn.Linear(hidden_dim, output_dim)
 
     def normalize_input(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -85,8 +86,15 @@ class MLPPlanner(nn.Module):
         # New shape: (b, n_track * 4)
         track_features = track_features.reshape(batch_size, -1)
 
-        # Assuming self.model outputs a tensor of shape (b, n_waypoints * 2)
-        waypoints_flat = self.model(track_features)
+        # Project to hidden dimension
+        x = self.input_proj(track_features)
+        
+        # Apply residual blocks
+        for block in self.blocks:
+            x = x + block(x)  # Residual connection
+        
+        # Project to output
+        waypoints_flat = self.output_proj(x)
 
         # Final shape: (b, n_waypoints, 2)
         n_waypoints = waypoints_flat.shape[1] // 2
@@ -100,33 +108,43 @@ class TransformerPlanner(nn.Module):
         self,
         n_track: int = 10,
         n_waypoints: int = 3,
-        d_model: int = 64,
+        d_model: int = 128,
     ):
         super().__init__()
 
         self.n_track = n_track
         self.n_waypoints = n_waypoints
+        self.d_model = d_model
         self.query_embed = nn.Embedding(n_waypoints, d_model)
 
-        # Track points into a latent space
+        # Track points into a latent space with positional encoding
         self.track_encoder = nn.Sequential(
             nn.Linear(2, d_model),
             nn.LayerNorm(d_model),
             nn.ReLU(),
+            nn.Dropout(0.1),
         )
+        
+        # Learnable positional encoding for track points
+        self.pos_encoder = nn.Parameter(torch.randn(1, n_track * 2, d_model) * 0.02)
 
         # Transformer decoder configuration
         self.transformer = nn.Transformer(
             d_model=d_model,
-            nhead=4, 
-            num_encoder_layers=3,
-            num_decoder_layers=3,
-            dim_feedforward=256,
-            dropout=0.1,
+            nhead=8, 
+            num_encoder_layers=4,
+            num_decoder_layers=4,
+            dim_feedforward=512,
+            dropout=0.15,
             batch_first=True,
         )
 
-        self.output_proj = nn.Linear(d_model, 2)
+        self.output_proj = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(d_model // 2, 2),
+        )
 
     def forward(
         self,
@@ -154,6 +172,9 @@ class TransformerPlanner(nn.Module):
 
         # Shape: (b, 2 * n_track, d_model)
         track_encoded = self.track_encoder(track_points)
+        
+        # Add positional encoding
+        track_encoded = track_encoded + self.pos_encoder
 
         # Shape: (n_waypoints, d_model) -> (b, n_waypoints, d_model)
         queries = self.query_embed.weight.unsqueeze(0).repeat(batch_size, 1, 1)
@@ -181,39 +202,19 @@ class CNNPlanner(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN), persistent=False)
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD), persistent=False)
 
-        n_blocks = 4
-        in_channels = 32 
-
-        # Convolutional layers
-        cnn_layers = [
-            torch.nn.Conv2d(3, in_channels, kernel_size=11, stride=2, padding=5),
+        # Ultra-lightweight architecture for speed
+        self.network = torch.nn.Sequential(
+            torch.nn.Conv2d(3, 12, kernel_size=5, stride=4, padding=2),
             torch.nn.ReLU(),
-        ]
-
-        # Add convolutional layers with increasing channels
-        c1 = in_channels
-        for _ in range(n_blocks):
-            c2 = c1 * 2
-            cnn_layers.extend([
-                torch.nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1),
-                torch.nn.BatchNorm2d(c2),
-                torch.nn.ReLU(),
-            ])
-            c1 = c2
-
-        # Final convolutional 
-        cnn_layers.append(torch.nn.Conv2d(c1, c1, kernel_size=1))
-        cnn_layers.append(torch.nn.AdaptiveAvgPool2d(1))
-
-        self.network = torch.nn.Sequential(*cnn_layers)
-
-        # Fully connected layers for final prediction
-        self.fcc = nn.Sequential(
-            nn.Linear(c1, 256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, n_waypoints * 2),
+            torch.nn.Conv2d(12, 24, kernel_size=3, stride=2, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(24, 32, kernel_size=3, stride=2, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.AdaptiveAvgPool2d(1),
         )
+
+        # Minimal FC layer
+        self.fcc = nn.Linear(32, n_waypoints * 2)
 
     def forward(self, image: torch.Tensor, **kwargs) -> torch.Tensor:
         """
