@@ -202,19 +202,17 @@ class CNNPlanner(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN), persistent=False)
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD), persistent=False)
 
-        # Ultra-lightweight architecture for speed
+        # Extremely lightweight for CPU inference speed
         self.network = torch.nn.Sequential(
-            torch.nn.Conv2d(3, 12, kernel_size=5, stride=4, padding=2),
+            torch.nn.Conv2d(3, 8, kernel_size=7, stride=8, padding=3),  # Aggressive downsampling
             torch.nn.ReLU(),
-            torch.nn.Conv2d(12, 24, kernel_size=3, stride=2, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(24, 32, kernel_size=3, stride=2, padding=1),
+            torch.nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
             torch.nn.ReLU(),
             torch.nn.AdaptiveAvgPool2d(1),
         )
 
-        # Minimal FC layer
-        self.fcc = nn.Linear(32, n_waypoints * 2)
+        # Direct output
+        self.fcc = nn.Linear(16, n_waypoints * 2)
 
     def forward(self, image: torch.Tensor, **kwargs) -> torch.Tensor:
         """
