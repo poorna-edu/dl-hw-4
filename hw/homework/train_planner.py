@@ -98,15 +98,15 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
         val_metrics = log_metrics(logger, metrics, epoch)
         scheduler.step()
         
-        # Save best model based on lateral error
+        # Save best model based on lateral error (most critical metric)
         current_lateral_error = val_metrics['lateral_error']
         if current_lateral_error < best_lateral_error:
             best_lateral_error = current_lateral_error
             best_epoch = epoch + 1
-            # Save best checkpoint in log directory
-            torch.save(model.state_dict(), log_dir / f"{model_name}_best.th")
-            # Also save to homework directory immediately
-            save_model(model)
+            # Save best checkpoint to log directory
+            best_checkpoint_path = log_dir / f"{model_name}_best.th"
+            torch.save(model.state_dict(), best_checkpoint_path)
+            print(f"  → New best model! Lateral error: {best_lateral_error:.4f}")
 
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % 10 == 0:
             print(
@@ -118,10 +118,23 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
                 f"Best Lateral: {best_lateral_error:.4f} (epoch {best_epoch})"
             )
 
-    # Save final model as well
-    torch.save(model.state_dict(), log_dir / f"{model_name}.th")
-    print(f"Training complete! Best lateral error: {best_lateral_error:.4f} at epoch {best_epoch}")
-    print(f"Best model saved to: {log_dir / f'{model_name}_best.th'}")
+    # Load and save the best model (not the final epoch model)
+    print(f"\nTraining complete! Best lateral error: {best_lateral_error:.4f} at epoch {best_epoch}")
+    
+    # Load best checkpoint and save to homework directory
+    best_checkpoint_path = log_dir / f"{model_name}_best.th"
+    if best_checkpoint_path.exists():
+        model.load_state_dict(torch.load(best_checkpoint_path, map_location=device))
+        save_model(model)  # Save best model to homework/
+        print(f"✓ Best model loaded and saved to homework/{model_name}.th")
+    else:
+        # Fallback: if no best model, save current model
+        save_model(model)
+        print(f"⚠ Warning: Best checkpoint not found, saved final epoch model")
+    
+    # Also save final training model to log directory for comparison
+    torch.save(model.state_dict(), log_dir / f"{model_name}_final.th")
+    print(f"✓ Training log saved to: {log_dir}")
 
 
 if __name__ == "__main__":
