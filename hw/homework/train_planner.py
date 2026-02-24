@@ -71,8 +71,8 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
     logger = tb.SummaryWriter(log_dir)
 
     model = load_model(model_name, **kwargs).to(device)
-    train_data = load_data("drive_data/train", shuffle=True, batch_size=batch_size, num_workers=2)
-    val_data = load_data("drive_data/val", shuffle=False)
+    train_data = load_data("drive_data/train", shuffle=True, batch_size=batch_size, num_workers=4)
+    val_data = load_data("drive_data/val", shuffle=False, batch_size=batch_size, num_workers=4)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     metrics = PlannerMetric()
 
@@ -103,5 +103,6 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--num_epoch", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--seed", type=int, default=2024)
     train(**vars(parser.parse_args()))
