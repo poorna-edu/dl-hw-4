@@ -71,17 +71,10 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
     logger = tb.SummaryWriter(log_dir)
 
     model = load_model(model_name, **kwargs).to(device)
-    train_data = load_data("drive_data/train", shuffle=True, batch_size=batch_size, num_workers=4)
-    val_data = load_data("drive_data/val", shuffle=False, batch_size=batch_size, num_workers=4)
+    train_data = load_data("drive_data/train", shuffle=True, batch_size=batch_size, num_workers=2)
+    val_data = load_data("drive_data/val", shuffle=False)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     metrics = PlannerMetric()
-
-    best_l1 = float("inf")
-    best_path = log_dir / f"{model_name}_best.th"
-    print(f"\n{'='*80}")
-    print(f"Training {model_name} for {num_epoch} epochs (batch_size={batch_size}, lr={lr})")
-    print(f"Best checkpoint will be saved to: {best_path}")
-    print(f"{'='*80}\n")
 
     for epoch in range(num_epoch):
         metrics.reset()
@@ -89,31 +82,19 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
         validation_step(model, val_data, metrics, device, model_name, **kwargs)
         val_metrics = log_metrics(logger, metrics, epoch)
 
-        # Save best checkpoint based on validation L1 error
-        current_l1 = val_metrics["l1_error"]
-        improved = False
-        if current_l1 < best_l1:
-            best_l1 = current_l1
-            torch.save(model.state_dict(), best_path)
-            improved = True
-
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % 10 == 0:
-            status = "⭐ NEW BEST!" if improved else f"(best: {best_l1:.4f})"
             print(
                 f"Epoch {epoch + 1:2d}/{num_epoch:2d} | "
                 f"Train Loss: {train_loss:.4f} | "
-                f"Val L1: {val_metrics['l1_error']:.4f} {status} | "
-                f"Lon: {val_metrics['longitudinal_error']:.4f} | "
-                f"Lat: {val_metrics['lateral_error']:.4f}"
+                f"Val L1 Error: {val_metrics['l1_error']:.4f} | "
+                f"Longitudinal Error: {val_metrics['longitudinal_error']:.4f} | "
+                f"Lateral Error: {val_metrics['lateral_error']:.4f} | "
+                f"Samples: {val_metrics['num_samples']:.4f}"
             )
 
     save_model(model)
     torch.save(model.state_dict(), log_dir / f"{model_name}.th")
-    print(f"\n{'='*80}")
-    if best_path.exists():
-        print(f"✓ Best model saved to {best_path} (L1 error: {best_l1:.4f})")
-    print(f"✓ Final model saved to {log_dir / f'{model_name}.th'}")
-    print(f"{'='*80}\n")
+    print(f"Model saved to {log_dir / f'{model_name}.th'}")
 
 
 if __name__ == "__main__":
@@ -122,6 +103,5 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--num_epoch", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--seed", type=int, default=2024)
     train(**vars(parser.parse_args()))
