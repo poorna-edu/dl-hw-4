@@ -202,19 +202,19 @@ class CNNPlanner(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN), persistent=False)
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD), persistent=False)
 
-        # Lightweight but higher-capacity for accuracy
+        # Balanced: faster than 16-32-64, more accurate than ultra-lite
         self.network = torch.nn.Sequential(
-            torch.nn.Conv2d(3, 16, kernel_size=5, stride=4, padding=2),
+            torch.nn.Conv2d(3, 12, kernel_size=5, stride=4, padding=2),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            torch.nn.Conv2d(12, 24, kernel_size=3, stride=2, padding=1),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            torch.nn.Conv2d(24, 48, kernel_size=3, stride=2, padding=1),
             torch.nn.ReLU(),
             torch.nn.AdaptiveAvgPool2d(1),
         )
 
         # Direct output
-        self.fcc = nn.Linear(64, n_waypoints * 2)
+        self.fcc = nn.Linear(48, n_waypoints * 2)
 
     def forward(self, image: torch.Tensor, **kwargs) -> torch.Tensor:
         """
