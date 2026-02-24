@@ -78,6 +78,10 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
 
     best_l1 = float("inf")
     best_path = log_dir / f"{model_name}_best.th"
+    print(f"\n{'='*80}")
+    print(f"Training {model_name} for {num_epoch} epochs (batch_size={batch_size}, lr={lr})")
+    print(f"Best checkpoint will be saved to: {best_path}")
+    print(f"{'='*80}\n")
 
     for epoch in range(num_epoch):
         metrics.reset()
@@ -87,25 +91,29 @@ def train(exp_dir="logs", model_name="linear", num_epoch=50, lr=1e-3, batch_size
 
         # Save best checkpoint based on validation L1 error
         current_l1 = val_metrics["l1_error"]
+        improved = False
         if current_l1 < best_l1:
             best_l1 = current_l1
             torch.save(model.state_dict(), best_path)
+            improved = True
 
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % 10 == 0:
+            status = "⭐ NEW BEST!" if improved else f"(best: {best_l1:.4f})"
             print(
                 f"Epoch {epoch + 1:2d}/{num_epoch:2d} | "
                 f"Train Loss: {train_loss:.4f} | "
-                f"Val L1 Error: {val_metrics['l1_error']:.4f} | "
-                f"Longitudinal Error: {val_metrics['longitudinal_error']:.4f} | "
-                f"Lateral Error: {val_metrics['lateral_error']:.4f} | "
-                f"Samples: {val_metrics['num_samples']:.4f}"
+                f"Val L1: {val_metrics['l1_error']:.4f} {status} | "
+                f"Lon: {val_metrics['longitudinal_error']:.4f} | "
+                f"Lat: {val_metrics['lateral_error']:.4f}"
             )
 
     save_model(model)
     torch.save(model.state_dict(), log_dir / f"{model_name}.th")
+    print(f"\n{'='*80}")
     if best_path.exists():
-        print(f"Best model saved to {best_path}")
-    print(f"Final model saved to {log_dir / f'{model_name}.th'}")
+        print(f"✓ Best model saved to {best_path} (L1 error: {best_l1:.4f})")
+    print(f"✓ Final model saved to {log_dir / f'{model_name}.th'}")
+    print(f"{'='*80}\n")
 
 
 if __name__ == "__main__":
