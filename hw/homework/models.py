@@ -100,7 +100,7 @@ class TransformerPlanner(nn.Module):
         self,
         n_track: int = 10,
         n_waypoints: int = 3,
-        d_model: int = 64,
+        d_model: int = 32,
     ):
         super().__init__()
 
@@ -111,17 +111,16 @@ class TransformerPlanner(nn.Module):
         # Track points into a latent space
         self.track_encoder = nn.Sequential(
             nn.Linear(2, d_model),
-            nn.LayerNorm(d_model),
             nn.ReLU(),
         )
 
         # Transformer decoder configuration - optimized for speed
         self.transformer = nn.Transformer(
             d_model=d_model,
-            nhead=4, 
-            num_encoder_layers=2,  # Reduced from 3 for speed
-            num_decoder_layers=2,  # Reduced from 3 for speed
-            dim_feedforward=256,
+            nhead=2,
+            num_encoder_layers=1,  # Reduced for speed
+            num_decoder_layers=1,  # Reduced for speed
+            dim_feedforward=128,
             dropout=0.0,  # Disable dropout for faster inference
             batch_first=True,
         )
@@ -159,16 +158,7 @@ class TransformerPlanner(nn.Module):
         queries = self.query_embed.weight.unsqueeze(0).expand(batch_size, -1, -1)
 
         # Shape after transform: (b, n_waypoints, d_model)
-        # Use torch.no_grad() context during eval for faster inference
-        if not self.training:
-            with torch.no_grad():
-                transformer_output = self.transformer(
-                    src=track_encoded, tgt=queries
-                )
-        else:
-            transformer_output = self.transformer(
-                src=track_encoded, tgt=queries
-            )
+        transformer_output = self.transformer(src=track_encoded, tgt=queries)
 
         # Shape: (b, n_waypoints, 2)
         waypoints = self.output_proj(transformer_output)
@@ -188,12 +178,12 @@ class CNNPlanner(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN), persistent=False)
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD), persistent=False)
 
-        n_blocks = 3  # Reduced from 4 for speed
-        in_channels = 32 
+        n_blocks = 2  # Further reduced for speed
+        in_channels = 16
 
         # Convolutional layers - optimized for speed
         cnn_layers = [
-            torch.nn.Conv2d(3, in_channels, kernel_size=7, stride=2, padding=3),  # Reduced kernel
+            torch.nn.Conv2d(3, in_channels, kernel_size=5, stride=2, padding=2),
             torch.nn.ReLU(),
         ]
 
@@ -203,7 +193,6 @@ class CNNPlanner(torch.nn.Module):
             c2 = c1 * 2
             cnn_layers.extend([
                 torch.nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1),
-                torch.nn.BatchNorm2d(c2),
                 torch.nn.ReLU(),
             ])
             c1 = c2
@@ -216,9 +205,9 @@ class CNNPlanner(torch.nn.Module):
 
         # Fully connected layers for final prediction - simplified
         self.fcc = nn.Sequential(
-            nn.Linear(c1, 256),
+            nn.Linear(c1, 128),
             nn.ReLU(),
-            nn.Linear(256, n_waypoints * 2),
+            nn.Linear(128, n_waypoints * 2),
         )
 
     def forward(self, image: torch.Tensor, **kwargs) -> torch.Tensor:
